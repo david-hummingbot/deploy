@@ -24,14 +24,17 @@ function show_menu() {
   echo "[6] Hummingbot Client Only"
   echo "    - Installs only the Hummingbot CLI client using the 'latest' tag"
   echo ""
-  echo "[7] Exit"
+  echo "[7] Use Setup Wizard"
+  echo "    - Create a custom configuration using the setup wizard"
+  echo ""
+  echo "[8] Exit"
   echo "    - Exits the setup process"
   echo ""
 }
 
 while true; do
   show_menu
-  read -p "Please select an option [1-7] or press Enter for default (1): " choice
+  read -p "Please select an option [1-8] or press Enter for default (1): " choice
   choice=${choice:-1}  # Set default value to 1 if choice is empty
 
   case $choice in
@@ -399,6 +402,140 @@ EOL
       exit 0
       ;;
     7)
+      echo "Starting Setup Wizard..."
+      
+      # Function to prompt for yes/no
+      ask_yes_no() {
+          while true; do
+              read -p "$1 (y/N): " choice
+              case "$choice" in
+                  [Yy]* ) return 0;;
+                  [Nn]* | "" ) return 1;;
+                  * ) echo "Please answer y or n.";;
+              esac
+          done
+      }
+
+      # Function to prompt with default value
+      prompt_with_default() {
+          local prompt="$1"
+          local default="$2"
+          read -p "$prompt (default: $default): " value
+          echo "${value:-$default}"
+      }
+
+      # Initialize empty docker-compose content
+      compose_content="services:\n"
+
+      # Dashboard Service
+      if ask_yes_no "Do you want to install Dashboard?"; then
+          compose_content+="  dashboard:\n"
+          container_name=$(prompt_with_default "Enter container name" "dashboard")
+          image_tag=$(prompt_with_default "Enter image tag" "latest")
+          port=$(prompt_with_default "Enter port" "8501")
+          auth_enabled=$(ask_yes_no "Enable Auth System?" && echo "True" || echo "False")
+          backend_host=$(prompt_with_default "Enter Backend API host" "backend-api")
+          backend_port=$(prompt_with_default "Enter Backend API port" "8000")
+          backend_user=$(prompt_with_default "Enter Backend API username" "admin")
+          backend_pass=$(prompt_with_default "Enter Backend API password" "admin")
+
+          compose_content+="    container_name: $container_name\n"
+          compose_content+="    image: hummingbot/dashboard:$image_tag\n"
+          compose_content+="    ports:\n"
+          compose_content+="      - \"$port:8501\"\n"
+          compose_content+="    environment:\n"
+          compose_content+="      - AUTH_SYSTEM_ENABLED=$auth_enabled\n"
+          compose_content+="      - BACKEND_API_HOST=$backend_host\n"
+          compose_content+="      - BACKEND_API_PORT=$backend_port\n"
+          compose_content+="      - BACKEND_API_USERNAME=$backend_user\n"
+          compose_content+="      - BACKEND_API_PASSWORD=$backend_pass\n"
+          compose_content+="    volumes:\n"
+          compose_content+="      - ./credentials.yml:/home/dashboard/credentials.yml\n"
+          compose_content+="      - ./pages:/home/dashboard/frontend/pages\n"
+          compose_content+="    networks:\n"
+          compose_content+="      - emqx-bridge\n"
+      fi
+
+      # Backend API Service
+      if ask_yes_no "Do you want to install Backend API?"; then
+          compose_content+="  backend-api:\n"
+          container_name=$(prompt_with_default "Enter container name" "backend-api")
+          image_tag=$(prompt_with_default "Enter image tag" "latest")
+          port=$(prompt_with_default "Enter port" "8000")
+          username=$(prompt_with_default "Enter username" "admin")
+          password=$(prompt_with_default "Enter password" "admin")
+
+          compose_content+="    container_name: $container_name\n"
+          compose_content+="    image: hummingbot/backend-api:$image_tag\n"
+          compose_content+="    ports:\n"
+          compose_content+="      - \"$port:8000\"\n"
+          compose_content+="    volumes:\n"
+          compose_content+="      - ./bots:/backend-api/bots\n"
+          compose_content+="      - /var/run/docker.sock:/var/run/docker.sock\n"
+          compose_content+="    env_file:\n"
+          compose_content+="      - .env\n"
+          compose_content+="    environment:\n"
+          compose_content+="      - BROKER_HOST=emqx\n"
+          compose_content+="      - BROKER_PORT=1883\n"
+          compose_content+="      - USERNAME=$username\n"
+          compose_content+="      - PASSWORD=$password\n"
+          compose_content+="    networks:\n"
+          compose_content+="      - emqx-bridge\n"
+      fi
+
+      # Broker Service
+      if ask_yes_no "Do you want to install Broker?"; then
+          compose_content+="  emqx:\n"
+          compose_content+="    container_name: hummingbot-broker\n"
+          compose_content+="    image: emqx:5\n"
+          compose_content+="    restart: unless-stopped\n"
+          compose_content+="    environment:\n"
+          compose_content+="      - EMQX_NAME=emqx\n"
+          compose_content+="      - EMQX_HOST=node1.emqx.local\n"
+          compose_content+="      - EMQX_CLUSTER__DISCOVERY_STRATEGY=static\n"
+          compose_content+="      - EMQX_CLUSTER__STATIC__SEEDS=[emqx@node1.emqx.local]\n"
+          compose_content+="      - EMQX_LOADED_PLUGINS=\"emqx_recon,emqx_retainer,emqx_management,emqx_dashboard\"\n"
+          compose_content+="    volumes:\n"
+          compose_content+="      - emqx-data:/opt/emqx/data\n"
+          compose_content+="      - emqx-log:/opt/emqx/log\n"
+          compose_content+="      - emqx-etc:/opt/emqx/etc\n"
+          compose_content+="    ports:\n"
+          compose_content+="      - \"1883:1883\"\n"
+          compose_content+="      - \"8883:8883\"\n"
+          compose_content+="      - \"8083:8083\"\n"
+          compose_content+="      - \"8084:8084\"\n"
+          compose_content+="      - \"8081:8081\"\n"
+          compose_content+="      - \"18083:18083\"\n"
+          compose_content+="      - \"61613:61613\"\n"
+          compose_content+="    networks:\n"
+          compose_content+="      emqx-bridge:\n"
+          compose_content+="        aliases:\n"
+          compose_content+="          - node1.emqx.local\n"
+      fi
+
+      # Add networks and volumes
+      compose_content+="\nnetworks:\n"
+      compose_content+="  emqx-bridge:\n"
+      compose_content+="    driver: bridge\n"
+      compose_content+="\nvolumes:\n"
+      compose_content+="  emqx-data: {}\n"
+      compose_content+="  emqx-log: {}\n"
+      compose_content+="  emqx-etc: {}\n"
+
+      # Write to docker-compose.yml
+      echo -e "$compose_content" > docker-compose.yml
+      echo "docker-compose.yml has been generated successfully!"
+      
+      # Ask to start services
+      if ask_yes_no "Would you like to start the services now?"; then
+          docker compose pull
+          docker compose up -d
+          echo "Services have been started!"
+      fi
+      
+      exit 0
+      ;;
+    8)
       echo "Exiting..."
       exit 0
       ;;
@@ -407,9 +544,3 @@ EOL
       ;;
   esac
 done
-
-
-
-
-
-
